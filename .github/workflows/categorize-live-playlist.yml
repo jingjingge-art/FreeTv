@@ -1,0 +1,361 @@
+name: 分类整理直播源
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: categorized-live-playlist
+  cancel-in-progress: false
+
+jobs:
+  update-playlist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+
+      - name: 下载并分类直播源
+        env:
+          SOURCE_URL: https://live.yang-1989.eu.org/Live.m3u
+        run: |
+          python3 <<'PY'
+          import os
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          source_url = os.environ["SOURCE_URL"]
+          request = urllib.request.Request(
+              source_url,
+              headers={
+                  "User-Agent":
+                  "Mozilla/5.0 (compatible; FreeTvPlaylistBot/1.0)"
+              },
+          )
+
+          with urllib.request.urlopen(request, timeout=45) as response:
+              raw = response.read(25 * 1024 * 1024 + 1)
+
+          if len(raw) > 25 * 1024 * 1024:
+              raise SystemExit("直播源超过 25 MiB，停止处理。")
+
+          text = raw.decode("utf-8-sig", errors="replace")
+          lines = text.splitlines()
+
+          if not any(
+              line.strip().upper() == "#EXTM3U"
+              for line in lines[:5]
+          ):
+              raise SystemExit(
+                  "下载内容不是有效的 M3U（未找到 #EXTM3U），保留现有文件。"
+              )
+
+          # 分类顺序即优先级；每个频道只进入第一个匹配到的分组
+          rules = [
+              ("央视", (
+                  "央视",
+                  "中央电视",
+                  "cctv",
+                  "央视频",
+                  "中国教育电视",
+              )),
+              ("新闻", (
+                  "新闻",
+                  "news",
+                  "时事",
+                  "资讯",
+                  "焦点",
+                  "观察",
+                  "报道",
+                  "日报",
+                  "新闻联播",
+                  "直播间",
+                  "24小时",
+              )),
+              ("综艺文艺剧集", (
+                  "综艺",
+                  "文艺",
+                  "美剧",
+                  "韩剧",
+                  "日剧",
+                  "台剧",
+                  "港剧",
+                  "泰剧",
+                  "国剧",
+                  "短剧",
+                  "说剧",
+                  "解说",
+                  "剧场",
+                  "戏曲",
+                  "曲艺",
+                  "相声",
+                  "小品",
+                  "脱口秀",
+                  "选秀",
+                  "真人秀",
+                  "综艺秀",
+                  "documentary",
+                  "纪录片",
+                  "探索",
+                  "发现",
+              )),
+              ("电影", (
+                  "电影",
+                  "影院",
+                  "片库",
+                  "影城",
+                  "华语电影",
+                  "动作片",
+                  "喜剧片",
+                  "爱情片",
+                  "科幻片",
+                  "恐怖片",
+                  "悬疑片",
+                  "战争片",
+                  "剧情片",
+                  "动画片",
+                  "movie",
+                  "movies",
+                  "cinema",
+                  "film",
+                  "horror",
+                  "action",
+                  "comedy",
+                  "drama",
+              )),
+              ("户外健身运动", (
+                  "户外",
+                  "健身",
+                  "塑型",
+                  "塑形",
+                  "运动",
+                  "体育",
+                  "瑜伽",
+                  "跑步",
+                  "健美",
+                  "拳击",
+                  "体操",
+                  "足球",
+                  "篮球",
+                  "网球",
+                  "排球",
+                  "乒乓球",
+                  "羽毛球",
+                  "赛车",
+                  "钓鱼",
+                  "登山",
+                  "徒步",
+                  "fitness",
+                  "workout",
+                  "sport",
+                  "sports",
+                  "outdoor",
+                  "football",
+                  "basketball",
+                  "tennis",
+                  "golf",
+              )),
+              ("美食生活", (
+                  "美食",
+                  "生活",
+                  "美味",
+                  "厨房",
+                  "烹饪",
+                  "家居",
+                  "家政",
+                  "生活方式",
+                  "健康",
+                  "养生",
+                  "旅行",
+                  "旅游",
+                  "美妆",
+                  "时尚",
+                  "情感",
+                  "婚恋",
+                  "公益",
+                  "食谱",
+                  "美酒",
+                  "茶道",
+                  "食尚",
+                  "美家",
+                  "food",
+                  "cooking",
+                  "cuisine",
+                  "lifestyle",
+                  "travel",
+                  "beauty",
+                  "fashion",
+                  "health",
+                  "recipe",
+              )),
+              ("TV频道", (
+                  "tv",
+              )),
+          ]
+
+          def split_extinf(line):
+              quoted = False
+              for index, char in enumerate(line):
+                  if char == '"':
+                      quoted = not quoted
+                  elif char == "," and not quoted:
+                      return line[:index], line[index + 1:]
+              return line, ""
+
+          def channel_name(extinf):
+              metadata, display_title = split_extinf(extinf)
+
+              match = re.search(
+                  r'\btvg-name\s*=\s*(["\'])(.*?)\1',
+                  metadata,
+                  re.IGNORECASE,
+              )
+              tvg_name = match.group(2).strip() if match else ""
+
+              display_name = display_title.strip() or tvg_name
+              match_text = f"{display_title} {tvg_name}".strip()
+
+              return display_name, match_text
+
+          def classify(extinf):
+              display_name, match_text = channel_name(extinf)
+              lowered = match_text.casefold()
+
+              for group, keywords in rules:
+                  if any(
+                      keyword.casefold() in lowered
+                      for keyword in keywords
+                  ):
+                      return group
+
+              has_chinese = bool(
+                  re.search(
+                      r"["
+                      r"\u3400-\u4dbf"
+                      r"\u4e00-\u9fff"
+                      r"\uf900-\ufaff"
+                      r"]",
+                      display_name,
+                  )
+              )
+              has_english = bool(
+                  re.search(r"[A-Za-z]", display_name)
+              )
+
+              if has_chinese and has_english:
+                  return "中英文混合"
+              if has_chinese:
+                  return "纯中文"
+              if has_english:
+                  return "纯英文"
+              return "未识别其他"
+
+          def set_group(extinf, group):
+              metadata, title = split_extinf(extinf)
+
+              metadata = re.sub(
+                  r"\s+group-title\s*="
+                  r"\s*(?:\"[^\"]*\"|'[^']*'|[^\s,]*)",
+                  "",
+                  metadata,
+                  flags=re.IGNORECASE,
+              ).rstrip()
+
+              safe_group = group.replace('"', "'")
+              return (
+                  f'{metadata} group-title="{safe_group}",'
+                  f'{title}'
+              )
+
+          entries = []
+          current = []
+
+          for line in lines:
+              if line.startswith("#EXTINF:"):
+                  if current:
+                      entries.append(current)
+                  current = [line]
+              elif current:
+                  current.append(line)
+
+          if current:
+              entries.append(current)
+
+          entries = [
+              entry
+              for entry in entries
+              if any(
+                  line.strip()
+                  and not line.lstrip().startswith("#")
+                  for line in entry[1:]
+              )
+          ]
+
+          if not entries:
+              raise SystemExit(
+                  "直播源中没有找到带播放地址的频道，保留现有文件。"
+              )
+
+          grouped = {}
+
+          for entry in entries:
+              group = classify(entry[0])
+              entry[0] = set_group(entry[0], group)
+              grouped.setdefault(group, []).append(entry)
+
+          group_order = (
+              [group for group, _ in rules]
+              + [
+                  "纯中文",
+                  "纯英文",
+                  "中英文混合",
+                  "未识别其他",
+              ]
+          )
+
+          output = ["#EXTM3U"]
+
+          for group in group_order:
+              for entry in grouped.get(group, []):
+                  output.extend(entry)
+
+          destination = Path("playlist/Live.m3u")
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(
+              "\n".join(output) + "\n",
+              encoding="utf-8",
+          )
+
+          print(
+              f"已处理 {len(entries)} 个频道，"
+              f"分为 {len(grouped)} 组，"
+              f"写入 {destination}。"
+          )
+
+          for group in group_order:
+              if grouped.get(group):
+                  print(
+                      f"  {group}: "
+                      f"{len(grouped[group])}"
+                  )
+          PY
+
+      - name: 提交更新后的播放列表
+        run: |
+          git add playlist/Live.m3u
+
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "更新分类直播源"
+            git push
+          else
+            echo "播放列表没有变化，无需提交。"
+          fi
