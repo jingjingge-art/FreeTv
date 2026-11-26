@@ -59,6 +59,25 @@ jobs:
 
           # 分类顺序即优先级；每个频道只进入第一个匹配到的分组
           rules = [
+              ("斗鱼", (
+                  "斗鱼",
+                  "斗鱼直播",
+                  "douyu",
+                  "dou yu",
+              )),
+              ("虎牙", (
+                  "虎牙",
+                  "虎牙直播",
+                  "huya",
+                  "hu ya",
+              )),
+              ("B站", (
+                  "哔哩哔哩",
+                  "哔哩",
+                  "bilibili",
+                  "b站",
+                  "bilibilitv",
+              )),
               ("央视", (
                   "央视",
                   "中央电视",
@@ -195,6 +214,32 @@ jobs:
                   "health",
                   "recipe",
               )),
+              ("韩文频道", (
+                  "한국",
+                  "한국어",
+                  "대한민국",
+                  "kbs",
+                  "sbs",
+                  "mbc",
+                  "jtbc",
+                  "tvn",
+                  "tv chosun",
+                  "channel a",
+                  "mbn",
+                  "ebs",
+                  "韩国",
+                  "韓國",
+                  "korea",
+                  "korean",
+                  "韩语",
+                  "韩文",
+                  "朝鲜语",
+                  "조선",
+                  "아리랑",
+                  "arirang",
+                  "연합뉴스",
+                  "ytn",
+              )),
               ("TV频道", (
                   "tv",
               )),
@@ -234,6 +279,13 @@ jobs:
                       for keyword in keywords
                   ):
                       return group
+
+              # 韩文字符优先于纯中文、纯英文和中英文混合判断
+              has_korean = bool(
+                  re.search(r"[\uac00-\ud7a3]", display_name)
+              )
+              if has_korean:
+                  return "韩文频道"
 
               has_chinese = bool(
                   re.search(
